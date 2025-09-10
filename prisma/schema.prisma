@@ -1,18 +1,20 @@
-
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
 generator client {
   provider = "prisma-client-js"
 }
 
 model User {
-  id           Int      @id @default(autoincrement())
-  name         String
-  email        String   @unique
-  phone        String?  // make it optional with ? (or remove ? if required)
-  passwordHash String
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id               Int      @id @default(autoincrement())
+  name             String
+  email            String   @unique
+  phone            String?  @unique
+  password         String
+  resetToken       String?    // store token
+  resetTokenExpiry DateTime?  // store expiry time
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 }
