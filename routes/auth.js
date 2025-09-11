@@ -7,16 +7,17 @@ import { otpStore } from "./otpStore.js";
 const router = express.Router();
 const prisma = new PrismaClient();
 
-//Node Mailer Transporter
 const transporter = nodemailer.createTransport({
-  service: "gmail",
+  host: "smtp.gmail.com",
+  port: 465,
+  secure: true,
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
-  },
+  }, 
 });
 
-// creatre otp to create user
+// create otp to create user
 router.post("/create-otp", async (req, res) => {
   try {
     const { email, phone } = req.body;
@@ -40,12 +41,23 @@ router.post("/create-otp", async (req, res) => {
 
     otpStore[email] = { otp, expiresAt: Date.now() + 10 * 60 * 1000 };
 
-    // Send OTP email
     await transporter.sendMail({
-      from: `"MyApp" <${process.env.EMAIL_USER}>`,
+      from: `"node-practice" <${process.env.EMAIL_USER}>`,
       to: email,
       subject: "Your OTP Code",
-      text: `Your OTP is ${otp}. It will expire in 10 minutes.`,
+      html: `
+    <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #1b1a1aff;border-radius: 25px;">
+      <h2 style="color: #4CAF50;">Welcome to Node-Practice </h2>
+      <p style="color: #fff;">Hello,</p>
+      <p style="color: #fff;">We received a request to register your account. Please use the following One-Time Password (OTP) to complete your registration:</p>
+      <p style="font-size: 22px; font-weight: bold; color: #fff; letter-spacing: 3px; text-align: center;">
+        ${otp}
+      </p>
+      <p style="color: #fff;">This code will <b>expire in 10 minutes</b>. If you did not request this, you can safely ignore this email.</p>
+      <br/>
+      <p style="font-size: 12px; color: #777;">Thank you,<br/>The Node-Practice Team</p>
+    </div>
+  `,
     });
 
     res.json({ message: "OTP sent to email" });
@@ -55,7 +67,6 @@ router.post("/create-otp", async (req, res) => {
   }
 });
 
-// verify otp and create user
 // verify otp and create user
 router.post("/register", async (req, res) => {
   try {
@@ -97,7 +108,28 @@ router.post("/register", async (req, res) => {
     });
   } catch (err) {
     console.error("Register error:", err);
-    res.status(500).json({ error: "Failed to register user" });
+
+    // Prisma unique constraint error
+    if (err.code === "P2002") {
+      const field = err.meta?.target?.[0]; // which field is duplicate
+      return res.status(400).json({
+        error: `${field} is already in use`,
+      });
+    }
+
+    // Validation errors
+    if (err.name === "ValidationError") {
+      return res.status(400).json({
+        error: "Validation failed",
+        details: err.errors,
+      });
+    }
+
+    // Default error
+    return res.status(500).json({
+      error: "Failed to register user",
+      details: err.message,
+    });
   }
 });
 
