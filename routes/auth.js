@@ -1,32 +1,83 @@
 import express from "express";
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcrypt";
-import crypto from "crypto"; // you forgot to import this
-import transporter from "../utils/email.js";
 import nodemailer from "nodemailer";
+import { otpStore } from "./otpStore.js";
 
 const router = express.Router();
 const prisma = new PrismaClient();
 
-router.post("/register", async (req, res) => {
-  try {
-    const { name, email, phone, password } = req.body;
+//Node Mailer Transporter
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+});
 
-    // Basic validation
-    if (!name || !email || !phone || !password) {
-      return res.status(400).json({ error: "All fields are required" });
+// creatre otp to create user
+router.post("/create-otp", async (req, res) => {
+  try {
+    const { email, phone } = req.body;
+
+    if (!email || !phone) {
+      return res.status(400).json({ error: "Email and phone are required" });
     }
 
-    // Check if email exists
+    // Check if already registered
     const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser) {
       return res.status(400).json({ error: "Email already in use" });
     }
 
-    // Check if phone exists
     const existingPhone = await prisma.user.findUnique({ where: { phone } });
     if (existingPhone) {
-      return res.status(400).json({ error: "Phone number already in use" });
+      return res.status(400).json({ error: "Phone already in use" });
+    }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+    otpStore[email] = { otp, expiresAt: Date.now() + 10 * 60 * 1000 };
+
+    // Send OTP email
+    await transporter.sendMail({
+      from: `"MyApp" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: "Your OTP Code",
+      text: `Your OTP is ${otp}. It will expire in 10 minutes.`,
+    });
+
+    res.json({ message: "OTP sent to email" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to create OTP" });
+  }
+});
+
+// verify otp and create user
+// verify otp and create user
+router.post("/register", async (req, res) => {
+  try {
+    const { name, email, phone, password, otp } = req.body;
+
+    if (!name || !email || !phone || !password || !otp) {
+      return res.status(400).json({ error: "All fields and OTP are required" });
+    }
+
+    // Get OTP data first
+    const otpData = otpStore[email];
+    console.log("Stored OTP:", otpData?.otp, "Provided OTP:", otp);
+
+    if (!otpData) return res.status(400).json({ error: "OTP not found" });
+
+    if (otpData.expiresAt < Date.now()) {
+      delete otpStore[email];
+      return res.status(400).json({ error: "OTP expired" });
+    }
+
+    if (otpData.otp !== otp) {
+      return res.status(400).json({ error: "Invalid OTP" });
     }
 
     // Hash password
@@ -34,26 +85,19 @@ router.post("/register", async (req, res) => {
 
     // Create user
     const user = await prisma.user.create({
-      data: {
-        name,
-        email,
-        phone,
-        password: hashedPassword,
-      },
+      data: { name, email, phone, password: hashedPassword },
     });
 
-    res.status(201).json({ message: "User registered successfully", user });
+    // ✅ Remove OTP after success
+    delete otpStore[email];
+
+    res.status(201).json({
+      message: "User registered successfully",
+      user,
+    });
   } catch (err) {
-    console.error(err);
-
-    // Prisma unique constraint error handling
-    if (err.code === "P2002") {
-      return res.status(400).json({
-        error: `Duplicate field: ${err.meta?.target?.join(", ")}`,
-      });
-    }
-
-    res.status(500).json({ error: "Internal server error" });
+    console.error("Register error:", err);
+    res.status(500).json({ error: "Failed to register user" });
   }
 });
 
@@ -140,56 +184,6 @@ router.post("/login", async (req, res) => {
     }
 
     res.json({ message: "Login successful", user });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// forget password
-router.post("/forget-password", async (req, res) => {
-  try {
-    const { email } = req.body;
-
-    if (!email) {
-      return res.status(400).json({ error: "Email is required" });
-    }
-
-    const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) {
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    // Generate reset token
-    const resetToken = crypto.randomBytes(32).toString("hex");
-    const resetTokenExpiry = new Date(Date.now() + 3600000); // 1 hour expiry
-
-    // Save token in DB
-    await prisma.user.update({
-      where: { email },
-      data: { resetToken, resetTokenExpiry },
-    });
-
-    // Create reset link
-    const resetLink = `http://localhost:3000/reset-password?token=${resetToken}`;
-
-    // Send email
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      },
-    });
-
-    await transporter.sendMail({
-      from: process.env.EMAIL_USER,
-      to: email,
-      subject: "Password Reset",
-      html: `<p>Click the link below to reset your password:</p>
-             <a href="${resetLink}">${resetLink}</a>`,
-    });
-
-    res.json({ message: "Password reset email sent!" });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
